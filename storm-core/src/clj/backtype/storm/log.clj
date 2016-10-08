@@ -17,25 +17,33 @@
 (ns backtype.storm.log
   (:require [clojure.tools [logging :as log]]))
 
+(defn unmangle
+  [class-name]
+  (str (.replace (clojure.string/replace class-name #"^(.+)\$([^@]+)(|@.+)$" "$1/$2") \_ \-) " "))
+
+(defmacro get-current-fn-name
+  []
+  `(-> (Throwable.) .getStackTrace first .getClassName unmangle))
+
 (defmacro log-message
   [& args]
-  `(log/info (str ~@args)))
+  `(log/info (str (get-current-fn-name) ~@args)))
 
 (defmacro log-error
   [e & args]
-  `(log/log :error ~e (str ~@args)))
+  `(log/log :error ~e (str (get-current-fn-name) ~@args)))
 
 (defmacro log-debug
   [& args]
-  `(log/debug (str ~@args)))
+  `(log/debug (str (get-current-fn-name) ~@args)))
 
 (defmacro log-warn-error
   [e & args]
-  `(log/warn (str ~@args) ~e))
+  `(log/warn (str (get-current-fn-name) ~@args) ~e))
 
 (defmacro log-warn
   [& args]
-  `(log/warn (str ~@args)))
+  `(log/warn (str (get-current-fn-name) ~@args)))
 
 (defn log-capture!
   [& args]

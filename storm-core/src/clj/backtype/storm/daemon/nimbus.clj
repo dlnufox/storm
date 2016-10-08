@@ -14,17 +14,25 @@
 ;; See the License for the specific language governing permissions and
 ;; limitations under the License.
 (ns backtype.storm.daemon.nimbus
+  (:require [clojure.set :as set])
   (:import [org.apache.thrift.server THsHaServer THsHaServer$Args])
   (:import [org.apache.thrift.protocol TBinaryProtocol TBinaryProtocol$Factory])
   (:import [org.apache.thrift.exception])
   (:import [org.apache.thrift.transport TNonblockingServerTransport TNonblockingServerSocket])
   (:import [java.nio ByteBuffer])
-  (:import [java.io FileNotFoundException])
+  (:import [java.io FileNotFoundException File FileOutputStream])
   (:import [java.nio.channels Channels WritableByteChannel])
   (:use [backtype.storm.scheduler.DefaultScheduler])
   (:import [backtype.storm.scheduler INimbus SupervisorDetails WorkerSlot TopologyDetails
-            Cluster Topologies SchedulerAssignment SchedulerAssignmentImpl DefaultScheduler ExecutorDetails])
+                                     Cluster Topologies SchedulerAssignment SchedulerAssignmentImpl DefaultScheduler ExecutorDetails]
+           (org.apache.commons.io FileUtils)
+           (backtype.storm.utils TimeCacheMap TimeCacheMap$ExpiredCallback Utils BufferFileInputStream ThriftTopologyUtils)
+           (backtype.storm.generated Nimbus$Processor TopologySummary SupervisorSummary ClusterSummary StormTopology TopologyInfo ExecutorSummary InvalidTopologyException NotAliveException Nimbus$Iface TopologyInitialStatus SubmitOptions KillOptions RebalanceOptions AlreadyAliveException ErrorInfo ExecutorInfo)
+           (backtype.storm.daemon Shutdownable)
+           (backtype.storm.nimbus ITopologyValidator)
+           (backtype.storm.daemon.common StormBase))
   (:use [backtype.storm bootstrap util])
+  (:use [backtype.storm log])
   (:use [backtype.storm.config :only [validate-configs-with-schemas]])
   (:use [backtype.storm.daemon common])
   (:gen-class
@@ -888,7 +896,7 @@
   (try-cause
     (read-storm-topology conf storm-id)
     (catch FileNotFoundException e
-       (throw (NotAliveException. storm-id)))
+      (throw (NotAliveException. storm-id)))
   )
 )
 
@@ -896,7 +904,7 @@
   (.prepare inimbus conf (master-inimbus-dir conf))
   (log-message "Starting Nimbus with conf " conf)
   (let [nimbus (nimbus-data conf inimbus)]
-    (.prepare ^backtype.storm.nimbus.ITopologyValidator (:validator nimbus) conf)
+    (.prepare ^ITopologyValidator (:validator nimbus) conf)
     (cleanup-corrupt-topologies! nimbus)
     (doseq [storm-id (.active-storms (:storm-cluster-state nimbus))]
       (transition! nimbus storm-id :startup))
@@ -929,7 +937,7 @@
               (validate-configs-with-schemas topo-conf)
               (catch IllegalArgumentException ex
                 (throw (InvalidTopologyException. (.getMessage ex)))))
-            (.validate ^backtype.storm.nimbus.ITopologyValidator (:validator nimbus)
+            (.validate ^ITopologyValidator (:validator nimbus)
                        storm-name
                        topo-conf
                        topology))
@@ -953,7 +961,7 @@
               (setup-storm-code conf storm-id uploadedJarLocation storm-conf topology)
               (.setup-heartbeats! storm-cluster-state storm-id)
               (let [thrift-status->kw-status {TopologyInitialStatus/INACTIVE :inactive
-                                              TopologyInitialStatus/ACTIVE :active}]
+                                              TopologyInitialStatus/ACTIVE   :active}]
                 (start-storm nimbus storm-name storm-id (thrift-status->kw-status (.get_initial_status submitOptions))))
               (mk-assignments nimbus)))
           (catch Throwable e
@@ -1073,7 +1081,7 @@
                                                                 (:uptime-secs info)
                                                                 (count ports)
                                                                 (count (:used-ports info))
-                                                                id )
+                                                                id)
                                             ))
               nimbus-uptime ((:uptime nimbus))
               bases (topology-bases storm-cluster-state)
@@ -1084,10 +1092,10 @@
                                                             (->> (:executor->node+port assignment)
                                                                  keys
                                                                  (mapcat executor-id->tasks)
-                                                                 count) 
+                                                                 count)
                                                             (->> (:executor->node+port assignment)
                                                                  keys
-                                                                 count)                                                            
+                                                                 count)
                                                             (->> (:executor->node+port assignment)
                                                                  vals
                                                                  set
@@ -1133,7 +1141,7 @@
                          errors
                          )
           ))
-      
+
       Shutdownable
       (shutdown [this]
         (log-message "Shutting down master")
@@ -1186,21 +1194,24 @@
 (defn standalone-nimbus []
   (reify INimbus
     (prepare [this conf local-dir]
-      )
+      (log-message "INimbus prepare()"))
     (allSlotsAvailableForScheduling [this supervisors topologies topologies-missing-assignments]
+      (log-message "INimbus allSlotsAvailableForScheduling()")
       (->> supervisors
            (mapcat (fn [^SupervisorDetails s]
                      (for [p (.getMeta s)]
                        (WorkerSlot. (.getId s) p))))
            set ))
     (assignSlots [this topology slots]
-      )
+      (log-message "INimbus assignSlots()"))
     (getForcedScheduler [this]
-      nil )
+      (log-message "INimbus getForceScheduler()")
+      nil)
     (getHostName [this supervisors node-id]
+      (log-message "INimbus getHostName()")
       (if-let [^SupervisorDetails supervisor (get supervisors node-id)]
-        (.getHost supervisor)))
-    ))
+        (.getHost supervisor)))))
 
 (defn -main []
+  (log-message "hello world")
   (-launch (standalone-nimbus)))
