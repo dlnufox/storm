@@ -92,6 +92,7 @@
     ))
 
 (defn validate-distributed-mode! [conf]
+  (log-message "检查是否为分布式模式")
   (if (local-mode? conf)
       (throw
         (IllegalArgumentException. "Cannot start server in local mode!"))))

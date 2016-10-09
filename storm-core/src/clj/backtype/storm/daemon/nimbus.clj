@@ -15,6 +15,7 @@
 ;; limitations under the License.
 (ns backtype.storm.daemon.nimbus
   (:require [clojure.set :as set])
+  (:require [backtype.storm.cluster :as cluster])
   (:import [org.apache.thrift.server THsHaServer THsHaServer$Args])
   (:import [org.apache.thrift.protocol TBinaryProtocol TBinaryProtocol$Factory])
   (:import [org.apache.thrift.exception])
@@ -30,10 +31,12 @@
            (backtype.storm.generated Nimbus$Processor TopologySummary SupervisorSummary ClusterSummary StormTopology TopologyInfo ExecutorSummary InvalidTopologyException NotAliveException Nimbus$Iface TopologyInitialStatus SubmitOptions KillOptions RebalanceOptions AlreadyAliveException ErrorInfo ExecutorInfo)
            (backtype.storm.daemon Shutdownable)
            (backtype.storm.nimbus ITopologyValidator)
-           (backtype.storm.daemon.common StormBase))
+           (backtype.storm.daemon.common StormBase Assignment)
+           (backtype.storm.cluster StormClusterState))
   (:use [backtype.storm bootstrap util])
   (:use [backtype.storm log])
-  (:use [backtype.storm.config :only [validate-configs-with-schemas]])
+  (:use [backtype.storm.config :only [master-stormdist-root master-inimbus-dir validate-configs-with-schemas read-storm-config]])
+  (:use [backtype.storm.timer])
   (:use [backtype.storm.daemon common])
   (:gen-class
     :methods [^{:static true} [launch [backtype.storm.scheduler.INimbus] void]]))
@@ -69,21 +72,21 @@
 
 (defn nimbus-data [conf inimbus]
   (let [forced-scheduler (.getForcedScheduler inimbus)]
-    {:conf conf
-     :inimbus inimbus
-     :submitted-count (atom 0)
-     :storm-cluster-state (cluster/mk-storm-cluster-state conf)
-     :submit-lock (Object.)
-     :heartbeats-cache (atom {})
+    {:conf conf                                             ;; 所有配置参数
+     :inimbus inimbus                                       ;; INimbuse实例
+     :submitted-count (atom 0)                              ;; Topology的提交次数（重启清零）
+     :storm-cluster-state (cluster/mk-storm-cluster-state conf) ;; 建立zk目录，存放cluster-state信息
+     :submit-lock (Object.)                                 ;; 提交Topology的锁
+     :heartbeats-cache (atom {})                            ;; Topology心跳缓存
      :downloaders (file-cache-map conf)
      :uploaders (file-cache-map conf)
-     :uptime (uptime-computer)
+     :uptime (uptime-computer)                              ;; nimbus 启动时间
      :validator (new-instance (conf NIMBUS-TOPOLOGY-VALIDATOR))
      :timer (mk-timer :kill-fn (fn [t]
                                  (log-error t "Error when processing event")
                                  (exit-process! 20 "Error when processing an event")
                                  ))
-     :scheduler (mk-scheduler conf inimbus)
+     :scheduler (mk-scheduler conf inimbus)                 ;; 调度器
      }))
 
 (defn inbox [nimbus]
@@ -91,6 +94,7 @@
 
 (defn- read-storm-conf [conf storm-id]
   (let [stormroot (master-stormdist-root conf storm-id)]
+    (log-message "storm root" stormroot)
     (merge conf
            (Utils/deserialize
             (FileUtils/readFileToByteArray
@@ -189,6 +193,7 @@
   ([nimbus storm-id event]
      (transition! nimbus storm-id event false))
   ([nimbus storm-id event error-on-no-transition?]
+   (log-message "storm event" event)
      (locking (:submit-lock nimbus)
        (let [system-events #{:startup}
              [event & event-args] (if (keyword? event) [event] event)
@@ -319,6 +324,7 @@
 
 (defn- read-storm-topology [conf storm-id]
   (let [stormroot (master-stormdist-root conf storm-id)]
+    (log-message "storm root" stormroot)
     (Utils/deserialize
       (FileUtils/readFileToByteArray
         (File. (master-stormcode-path stormroot))
@@ -635,9 +641,11 @@
 
 
 (defn basic-supervisor-details-map [storm-cluster-state]
+  (log-message "从zk上获取所有supervisor的信息")
   (let [infos (all-supervisor-info storm-cluster-state)]
     (->> infos
          (map (fn [[id info]]
+                ;; id 是supervisor-id，也是WorkerSlot的nodeId
                  [id (SupervisorDetails. id (:hostname info) (:scheduler-meta info) nil)]))
          (into {}))))
 
@@ -650,21 +658,25 @@
 ;; only keep existing slots that satisfy one of those slots. for rest, reassign them across remaining slots
 ;; edge case for slots with no executor timeout but with supervisor timeout... just treat these as valid slots that can be reassigned to. worst comes to worse the executor will timeout and won't assign here next time around
 (defnk mk-assignments [nimbus :scratch-topology-id nil]
-  (let [conf (:conf nimbus)
+       (log-message "定期重新分发任务")
+       (let [conf (:conf nimbus)
         storm-cluster-state (:storm-cluster-state nimbus)
+             _ (log-message "storm cluster state" storm-cluster-state)
         ^INimbus inimbus (:inimbus nimbus) 
         ;; read all the topologies
         topology-ids (.active-storms storm-cluster-state)
         topologies (into {} (for [tid topology-ids]
+                              ;; {^String ^TopologyDetails}
                               {tid (read-topology-details nimbus tid)}))
         topologies (Topologies. topologies)
-        ;; read all the assignments
+        ;; read all the assignments 已经分配资源的topology-id的list
         assigned-topology-ids (.assignments storm-cluster-state nil)
         existing-assignments (into {} (for [tid assigned-topology-ids]
                                         ;; for the topology which wants rebalance (specified by the scratch-topology-id)
                                         ;; we exclude its assignment, meaning that all the slots occupied by its assignment
                                         ;; will be treated as free slot in the scheduler code.
                                         (when (or (nil? scratch-topology-id) (not= tid scratch-topology-id))
+                                          ;; {tid Assignment} 通过反序列化得到对应tid的分配信息？
                                           {tid (.assignment-info storm-cluster-state tid nil)})))
         ;; make the new assignments for topologies
         topology->executor->node+port (compute-new-topology->executor->node+port
@@ -695,11 +707,12 @@
                                                                       (for [id reassign-executors]
                                                                         [id now-secs]
                                                                         )))]]
+                                   ;; 新的任务分配信息{topology-id Assignment}
                                    {topology-id (Assignment.
-                                                 (master-stormdist-root conf topology-id)
-                                                 (select-keys all-node->host all-nodes)
-                                                 executor->node+port
-                                                 start-times)}))]
+                                                  (master-stormdist-root conf topology-id)
+                                                  (select-keys all-node->host all-nodes)
+                                                  executor->node+port
+                                                  start-times)}))]
 
     ;; tasks figure out what tasks to talk to by looking at topology at runtime
     ;; only log/set when there's been a change to the assignment
@@ -856,10 +869,12 @@
         ))))
 
 (defn cleanup-corrupt-topologies! [nimbus]
+  (log-message "清理zk存在，本地目录不存在的Topology")
   (let [storm-cluster-state (:storm-cluster-state nimbus)
         code-ids (set (code-ids (:conf nimbus)))
         active-topologies (set (.active-storms storm-cluster-state))
         corrupt-topologies (set/difference active-topologies code-ids)]
+    (log-message "storm cluster state" storm-cluster-state)
     (doseq [corrupt corrupt-topologies]
       (log-message "Corrupt topology " corrupt " has state on zookeeper but doesn't have a local dir on Nimbus. Cleaning up...")
       (.remove-storm! storm-cluster-state corrupt)
@@ -900,7 +915,7 @@
   )
 )
 
-(defserverfn service-handler [conf inimbus]
+(defn service-handler! [conf inimbus]
   (.prepare inimbus conf (master-inimbus-dir conf))
   (log-message "Starting Nimbus with conf " conf)
   (let [nimbus (nimbus-data conf inimbus)]
@@ -1155,6 +1170,9 @@
       (waiting? [this]
         (timer-waiting? (:timer nimbus))))))
 
+
+(defserverfn service-handler [conf inimbus]
+             (service-handler! conf inimbus))
 (defn launch-server! [conf nimbus]
   (validate-distributed-mode! conf)
   (let [service-handler (service-handler conf nimbus)
@@ -1166,6 +1184,7 @@
                     )
        server (THsHaServer. (do (set! (. options maxReadBufferBytes)(conf NIMBUS-THRIFT-MAX-BUFFER-SIZE)) options))]
     (add-shutdown-hook-with-force-kill-in-1-sec (fn []
+                                                  (log-message "关闭 Nimbus 的service-handler")
                                                   (.shutdown service-handler)
                                                   (.stop server)))
     (log-message "Starting Nimbus server...")
@@ -1194,21 +1213,20 @@
 (defn standalone-nimbus []
   (reify INimbus
     (prepare [this conf local-dir]
-      (log-message "INimbus prepare()"))
+      (log-message "INimbus 调用prepare方法，但不起任何作用"))
     (allSlotsAvailableForScheduling [this supervisors topologies topologies-missing-assignments]
-      (log-message "INimbus allSlotsAvailableForScheduling()")
+      (log-message "INimbus 获取所有可用的Slot")
       (->> supervisors
            (mapcat (fn [^SupervisorDetails s]
                      (for [p (.getMeta s)]
                        (WorkerSlot. (.getId s) p))))
            set ))
     (assignSlots [this topology slots]
-      (log-message "INimbus assignSlots()"))
+      )
     (getForcedScheduler [this]
-      (log-message "INimbus getForceScheduler()")
       nil)
     (getHostName [this supervisors node-id]
-      (log-message "INimbus getHostName()")
+      (log-message "INimbus 获取本机的hostname")
       (if-let [^SupervisorDetails supervisor (get supervisors node-id)]
         (.getHost supervisor)))))
 

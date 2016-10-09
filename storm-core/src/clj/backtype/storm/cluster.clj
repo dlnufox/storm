@@ -233,6 +233,7 @@
 ;; Watches should be used for optimization. When ZK is reconnecting, they're not guaranteed to be called.
 (defn mk-storm-cluster-state
   [cluster-state-spec]
+  (log-message "建立zk目录，存放cluster-state信息")
   (let [[solo? cluster-state] (if (satisfies? ClusterState cluster-state-spec)
                                 [false cluster-state-spec]
                                 [true (mk-distributed-cluster-state cluster-state-spec)])
@@ -242,6 +243,7 @@
         supervisors-callback (atom nil)
         assignments-callback (atom nil)
         storm-base-callback (atom {})
+        ;; state-id 有什么用？
         state-id (register
                    cluster-state
                    (fn [type path]

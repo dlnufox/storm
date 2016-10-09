@@ -20,6 +20,7 @@
   (:import [backtype.storm.utils Utils LocalState])
   (:import [org.apache.commons.io FileUtils])
   (:require [clojure [string :as str]])
+  (:use [backtype.storm.log :only [log-message]])
   (:use [backtype.storm util]))
 
 (def RESOURCES-SUBDIR "resources")
@@ -118,6 +119,7 @@
 
 (defn read-storm-config
   []
+  (log-message "读取defaults.yaml和storm.yaml的配置内容")
   (let [conf (clojurify-structure (Utils/readStormConfig))]
     (validate-configs-with-schemas conf)
     conf))
@@ -160,7 +162,9 @@
 
 (defn master-inimbus-dir
   [conf]
-  (str (master-local-dir conf) file-path-separator "inimbus"))
+  (let [mldir (str (master-local-dir conf) file-path-separator "inimbus")]
+    (log-message "mldir" mldir)
+    mldir))
 
 (defn supervisor-local-dir
   [conf]

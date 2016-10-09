@@ -15,7 +15,7 @@
 ;; limitations under the License.
 
 (ns backtype.storm.util
-  (:import [java.net InetAddress])
+  (:import [java.net InetAddress URLDecoder URLEncoder])
   (:import [java.util Map Map$Entry List ArrayList Collection Iterator HashMap])
   (:import [java.io FileReader FileNotFoundException])
   (:import [backtype.storm Config])
@@ -25,7 +25,7 @@
   (:import [java.util.zip ZipFile])
   (:import [java.util.concurrent.locks ReentrantReadWriteLock])
   (:import [java.util.concurrent Semaphore])
-  (:import [java.io File FileOutputStream StringWriter PrintWriter IOException])
+  (:import [java.io File FileOutputStream StringWriter PrintWriter IOException RandomAccessFile])
   (:import [java.lang.management ManagementFactory])
   (:import [org.apache.commons.exec DefaultExecutor CommandLine])
   (:import [org.apache.commons.io FileUtils])
@@ -813,11 +813,11 @@
 
 (defn url-encode
   [s]
-  (java.net.URLEncoder/encode s "UTF-8"))
+  (URLEncoder/encode s "UTF-8"))
 
 (defn url-decode
   [s]
-  (java.net.URLDecoder/decode s "UTF-8"))
+  (URLDecoder/decode s "UTF-8"))
 
 (defn join-maps
   [& maps]

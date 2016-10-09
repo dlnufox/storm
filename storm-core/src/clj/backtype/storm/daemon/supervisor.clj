@@ -16,9 +16,12 @@
 (ns backtype.storm.daemon.supervisor
   (:import [backtype.storm.scheduler ISupervisor]
            [java.io IOException]
-           [java.net URI])
+           [java.net URI]
+           (backtype.storm.utils LocalState Time)
+           (backtype.storm Constants))
   (:use [backtype.storm bootstrap])
   (:use [backtype.storm.daemon common])
+  (:use [backtype.storm log])
   (:require [backtype.storm.daemon [worker :as worker]])
   (:gen-class
     :methods [^{:static true} [launch [backtype.storm.scheduler.ISupervisor] void]]))

@@ -22,9 +22,15 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class Topologies {
+    /**
+     * {topology-id, TopologyDetails}
+     */
     Map<String, TopologyDetails> topologies;
+    /**
+     * {topology-name, topology-id}
+     */
     Map<String, String> nameToId;
-    
+
     public Topologies(Map<String, TopologyDetails> topologies) {
         if(topologies==null) topologies = new HashMap();
         this.topologies = new HashMap<String, TopologyDetails>(topologies.size());
