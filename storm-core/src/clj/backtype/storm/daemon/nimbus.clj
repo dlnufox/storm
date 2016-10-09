@@ -679,6 +679,7 @@
                                           ;; {tid Assignment} 通过反序列化得到对应tid的分配信息？
                                           {tid (.assignment-info storm-cluster-state tid nil)})))
         ;; make the new assignments for topologies
+             ;; {topology-id -> {executor [node port]}}
         topology->executor->node+port (compute-new-topology->executor->node+port
                                        nimbus
                                        existing-assignments
@@ -691,16 +692,22 @@
         basic-supervisor-details-map (basic-supervisor-details-map storm-cluster-state)
         
         ;; construct the final Assignments by adding start-times etc into it
-        new-assignments (into {} (for [[topology-id executor->node+port] topology->executor->node+port
+        new-assignments (into {} (for [;; {topology-id -> {executor [node port]}}
+                                       [topology-id executor->node+port] topology->executor->node+port
                                         :let [existing-assignment (get existing-assignments topology-id)
+                                              _ (log-message "existing-assignment" existing-assignment)
+                                              ;; 通过vals取得 [[node port]]，(map first)取得 [node1 node2 ...]，再去重
                                               all-nodes (->> executor->node+port vals (map first) set)
+                                              ;; 通过all-nodes得到对应的hostname的列表 [[node1 host1] [node2 host2]]
                                               node->host (->> all-nodes
                                                               (mapcat (fn [node]
                                                                         (if-let [host (.getHostName inimbus basic-supervisor-details-map node)]
                                                                           [[node host]]
                                                                           )))
                                                               (into {}))
+                                              ;; :node->host的数据结构是什么？
                                               all-node->host (merge (:node->host existing-assignment) node->host)
+                                              ;; 计算出需要重新分配的executors
                                               reassign-executors (changed-executors (:executor->node+port existing-assignment) executor->node+port)
                                               start-times (merge (:executor->start-time-secs existing-assignment)
                                                                 (into {}
@@ -711,6 +718,7 @@
                                    {topology-id (Assignment.
                                                   (master-stormdist-root conf topology-id)
                                                   (select-keys all-node->host all-nodes)
+                                                  ;; {executor [node port]}
                                                   executor->node+port
                                                   start-times)}))]
 
@@ -719,16 +727,20 @@
     (doseq [[topology-id assignment] new-assignments
             :let [existing-assignment (get existing-assignments topology-id)
                   topology-details (.getById topologies topology-id)]]
+      (log-message "assignment" assignment)
       (if (= existing-assignment assignment)
         (log-debug "Assignment for " topology-id " hasn't changed")
         (do
           (log-message "Setting new assignment for topology id " topology-id ": " (pr-str assignment))
+          ;; 向ZK更新分配信息
+          (log-message "向ZK更新分配信息")
           (.set-assignment! storm-cluster-state topology-id assignment)
           )))
     (->> new-assignments
           (map (fn [[topology-id assignment]]
             (let [existing-assignment (get existing-assignments topology-id)]
-              [topology-id (map to-worker-slot (newly-added-slots existing-assignment assignment))] 
+              ;; assignment 与 existing-assignment的差积，并生成各个WorkerSlot
+              [topology-id (map to-worker-slot (newly-added-slots existing-assignment assignment))]
               )))
           (into {})
           (.assignSlots inimbus topologies))
@@ -839,6 +851,7 @@
             TOPOLOGY-MAX-TASK-PARALLELISM (total-conf TOPOLOGY-MAX-TASK-PARALLELISM)})))
 
 (defn do-cleanup [nimbus]
+  ;; to-cleanup-ids绑定需要清理的topology的id，即不再活跃的topology的id，cleanup-storm-ids函数参见其定义部分
   (let [storm-cluster-state (:storm-cluster-state nimbus)
         conf (:conf nimbus)
         submit-lock (:submit-lock nimbus)]
