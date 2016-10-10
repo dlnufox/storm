@@ -752,6 +752,7 @@
         conf (:conf nimbus)
         storm-conf (read-storm-conf conf storm-id)
         topology (system-topology! storm-conf (read-storm-topology conf storm-id))
+        ;; {tid int}
         num-executors (->> (all-components topology) (map-val num-start-executors))]
     (log-message "Activating " storm-name ": " storm-id)
     (.activate-storm! storm-cluster-state
@@ -995,6 +996,7 @@
               (let [thrift-status->kw-status {TopologyInitialStatus/INACTIVE :inactive
                                               TopologyInitialStatus/ACTIVE   :active}]
                 (start-storm nimbus storm-name storm-id (thrift-status->kw-status (.get_initial_status submitOptions))))
+              ;; 有新任务新加，需重新分配任务
               (mk-assignments nimbus)))
           (catch Throwable e
             (log-warn-error e "Topology submission exception. (topology name='" storm-name "')")
@@ -1089,6 +1091,7 @@
             (ByteBuffer/wrap ret)
             )))
 
+      ;; 获取storm集群配置信息
       (^String getNimbusConf [this]
         (to-json (:conf nimbus)))
 
@@ -1101,6 +1104,7 @@
       (^StormTopology getUserTopology [this ^String id]
         (try-read-storm-topology conf id))
 
+      ;; 获取当前集群的汇总信息包括supervisor汇总信息，nimbus启动时间，所有活跃topology汇总信息
       (^ClusterSummary getClusterInfo [this]
         (let [storm-cluster-state (:storm-cluster-state nimbus)
               supervisor-infos (all-supervisor-info storm-cluster-state)
@@ -1139,7 +1143,8 @@
                            nimbus-uptime
                            topology-summaries)
           ))
-      
+
+      ;; 获取指定storm-id的topology的TopologyInfo数据
       (^TopologyInfo getTopologyInfo [this ^String storm-id]
         (let [storm-cluster-state (:storm-cluster-state nimbus)
               task->component (storm-task-info (try-read-storm-topology conf storm-id) (try-read-storm-conf conf storm-id))
@@ -1192,6 +1197,7 @@
              (service-handler! conf inimbus))
 (defn launch-server! [conf nimbus]
   (validate-distributed-mode! conf)
+  ;; service-handler实现了 Nimbus$Iface 接口
   (let [service-handler (service-handler conf nimbus)
         options (-> (TNonblockingServerSocket. (int (conf NIMBUS-THRIFT-PORT)))
                     (THsHaServer$Args.)

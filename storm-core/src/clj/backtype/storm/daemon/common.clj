@@ -146,6 +146,7 @@
   (validate-ids! topology)
   (doseq [f thrift/SPOUT-FIELDS
           obj (->> f (.getFieldValue topology) vals)]
+    ;; TODO 没看明白
     (if-not (empty? (-> obj .get_common .get_inputs))
       (throw (InvalidTopologyException. "May not declare inputs for a spout"))))
   (doseq [[comp-id comp] (all-components topology)
@@ -203,6 +204,7 @@
                                          :conf {TOPOLOGY-TASKS num-executors
                                                 TOPOLOGY-TICK-TUPLE-FREQ-SECS (storm-conf TOPOLOGY-MESSAGE-TIMEOUT-SECS)})]
     (dofor [[_ bolt] (.get_bolts ret)
+            ;; ComponentCommon有什么作用？
             :let [common (.get_common bolt)]]
            (do
              (.put_to_streams common ACKER-ACK-STREAM-ID (thrift/output-fields ["id" "ack-val"]))
