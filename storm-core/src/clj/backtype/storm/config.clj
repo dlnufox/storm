@@ -133,6 +133,7 @@
 (defn master-local-dir
   [conf]
   (let [ret (str (conf STORM-LOCAL-DIR) file-path-separator "nimbus")]
+    (log-message "master-local-dir" ret)
     (FileUtils/forceMkdir (File. ret))
     ret))
 

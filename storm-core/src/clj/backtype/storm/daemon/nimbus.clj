@@ -788,10 +788,12 @@
       ))
 
 (defn cleanup-storm-ids [conf storm-cluster-state]
+  ;; 获取要清理的storm-id列表
   (let [heartbeat-ids (set (.heartbeat-storms storm-cluster-state))
         error-ids (set (.error-topologies storm-cluster-state))
         code-ids (code-ids conf)
         assigned-ids (set (.active-storms storm-cluster-state))]
+    ;; 这四种id之间是什么关系？
     (set/difference (set/union heartbeat-ids error-ids code-ids) assigned-ids)
     ))
 
@@ -817,6 +819,7 @@
 
 (defn normalize-topology [storm-conf ^StormTopology topology]
   (let [ret (.deepCopy topology)]
+    ;; component是什么类型？
     (doseq [[_ component] (all-components ret)]
       (.set_json_conf
         (.get_common component)
@@ -979,6 +982,7 @@
                               (assoc TOPOLOGY-NAME storm-name))
                             topology)
                 total-storm-conf (merge conf storm-conf)
+                ;; 作用是什么？
                 topology (normalize-topology total-storm-conf topology)
                 storm-cluster-state (:storm-cluster-state nimbus)]
             (system-topology! total-storm-conf topology) ;; this validates the structure of the topology
